@@ -1,0 +1,333 @@
+#!/usr/bin/env zsh
+# Author: Víctor Falcón Ruíz <hi@victorfalcon.es>
+# License: MIT
+# git-worktree-new.sh
+# Manages git worktrees with subcommand dispatch.
+#
+# Usage:
+#   git-worktree-new.sh <branch-name>          # create (default)
+#   git-worktree-new.sh new <branch-name>       # create
+#   git-worktree-new.sh del <branch-name>       # delete
+#   git-worktree-new.sh delete <branch-name>    # delete
+#   git-worktree-new.sh help                    # show help
+
+set -e
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+typeset -a WT_SETUP_SCRIPT_PATHS=(
+  "worktree.sh"
+  ".local-dev/scripts/setup-worktree.sh"
+)
+
+WT_DEFAULT_BRANCH="${WT_DEFAULT_BRANCH:-}"
+WT_WORKTREES_DIR="${WT_WORKTREES_DIR:-}"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_wt_git_check() {
+  if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Error: not a git repository."
+    exit 1
+  fi
+}
+
+_wt_usage() {
+  cat <<EOF
+Usage:
+  $(basename "$0") <branch-name>
+  $(basename "$0") new <branch-name>
+  $(basename "$0") del <branch-name>
+  $(basename "$0") delete <branch-name>
+  $(basename "$0") help
+
+Config:
+  WT_DEFAULT_BRANCH  Override the branch used for merged checks.
+  WT_WORKTREES_DIR   Override the parent directory where worktrees are stored.
+
+Behavior:
+  - Creates worktrees under WT_WORKTREES_DIR/<repo-name>/<branch-name>
+  - Defaults WT_WORKTREES_DIR to ../worktrees next to the repo root
+  - Opens the worktree in a new Zellij tab when inside a Zellij session
+EOF
+}
+
+_wt_repo_root() {
+  git rev-parse --show-toplevel 2>/dev/null
+}
+
+_wt_default_branch() {
+  local branch
+
+  if [[ -n "$WT_DEFAULT_BRANCH" ]]; then
+    echo "$WT_DEFAULT_BRANCH"
+    return 0
+  fi
+
+  branch="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+  if [[ -z "$branch" ]]; then
+    branch="$(git branch -r --format='%(refname:short)' 2>/dev/null | grep -E '/(main|master|trunk|develop)$' | head -1 | sed 's@.*/@@')"
+  fi
+  if [[ -z "$branch" ]]; then
+    branch="$(git branch --format='%(refname:short)' 2>/dev/null | grep -E '^(main|master|trunk|develop)$' | head -1)"
+  fi
+  echo "${branch:-main}"
+}
+
+# Returns 0 if the branch is fully merged (regular or squash) into default branch.
+_wt_is_merged() {
+  local branch="$1" default_branch="$2"
+
+  # Regular merge: branch tip is an ancestor of default branch
+  if git merge-base --is-ancestor "$branch" "$default_branch" 2>/dev/null; then
+    return 0
+  fi
+
+  # Squash merge detection via commit-tree + git-cherry:
+  # Create a hypothetical single commit that represents the cumulative diff of the
+  # branch over the merge-base, then check if an equivalent patch already exists in
+  # the default branch.
+  local merge_base test_commit cherry_result
+  merge_base="$(git merge-base "$default_branch" "$branch" 2>/dev/null)" || return 1
+  [[ -z "$merge_base" ]] && return 1
+
+  test_commit="$(git commit-tree "${branch}^{tree}" -p "$merge_base" -m "__wt_squash_test__" 2>/dev/null)" || return 1
+  [[ -z "$test_commit" ]] && return 1
+
+  cherry_result="$(git cherry "$default_branch" "$test_commit" 2>/dev/null)" || return 1
+
+  # "- <hash>" means an equivalent patch was found in default_branch (squash merged).
+  # Empty result means the branch introduced no changes (already up-to-date).
+  if [[ "$cherry_result" == "- "* ]] || [[ -z "$cherry_result" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+_wt_worktree_exists() {
+  local target_path="$1" line current_path=""
+
+  while IFS= read -r line; do
+    if [[ "$line" == worktree\ * ]]; then
+      current_path="${line#worktree }"
+      if [[ "$current_path" == "$target_path" ]]; then
+        return 0
+      fi
+    fi
+  done < <(git worktree list --porcelain)
+
+  return 1
+}
+
+_wt_worktree_path_for_branch() {
+  local branch_ref="refs/heads/$1" line current_path=""
+
+  while IFS= read -r line; do
+    if [[ "$line" == worktree\ * ]]; then
+      current_path="${line#worktree }"
+    elif [[ "$line" == "branch $branch_ref" ]]; then
+      printf '%s\n' "$current_path"
+      return 0
+    fi
+  done < <(git worktree list --porcelain)
+
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Create worktree
+# ---------------------------------------------------------------------------
+
+_wt_new() {
+  local BRANCH_NAME="$1"
+
+  if [[ -z "$BRANCH_NAME" ]]; then
+    echo "Error: branch name is required."
+    echo "Usage: $(basename "$0") [new] <branch-name>"
+    exit 1
+  fi
+
+  _wt_git_check
+
+  local ORIGIN_DIR FOLDER_NAME WORKTREE_ROOT WORKTREE_PATH
+  ORIGIN_DIR="$(_wt_repo_root)"
+  FOLDER_NAME="$(basename "$ORIGIN_DIR")"
+  WORKTREE_ROOT="${WT_WORKTREES_DIR:-$(dirname "$ORIGIN_DIR")/worktrees}"
+  WORKTREE_PATH="$WORKTREE_ROOT/$FOLDER_NAME/$BRANCH_NAME"
+
+  mkdir -p "$(dirname "$WORKTREE_PATH")"
+
+  if _wt_worktree_exists "$WORKTREE_PATH"; then
+    echo "Worktree already exists at $WORKTREE_PATH — opening tab."
+  elif [[ -e "$WORKTREE_PATH" ]]; then
+    echo "Error: path already exists but is not a registered worktree: $WORKTREE_PATH"
+    exit 1
+  elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+    git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" 2>&1
+  else
+    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" 2>&1
+  fi
+
+  # Bail out gracefully when not inside a Zellij session
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    echo "Not in a Zellij session — navigate manually to: $WORKTREE_PATH"
+    exit 0
+  fi
+
+  # Pick a setup script if one exists in the origin repo
+  local SETUP_SCRIPT=""
+  local relative_setup_script
+  for relative_setup_script in "${WT_SETUP_SCRIPT_PATHS[@]}"; do
+    if [[ -f "$ORIGIN_DIR/$relative_setup_script" ]]; then
+      SETUP_SCRIPT="$WORKTREE_PATH/$relative_setup_script"
+      break
+    fi
+  done
+
+  # Write a self-deleting temp script that zellij will run in the new tab.
+  local TMPSCRIPT LAUNCH_COMMAND
+  TMPSCRIPT="$(mktemp "${TMPDIR:-/tmp}/wt-setup.XXXXXX")"
+  cat > "$TMPSCRIPT" <<'EOF'
+#!/usr/bin/env zsh
+
+TMPSCRIPT="$1"
+WORKTREE_PATH="$2"
+BRANCH_NAME="$3"
+SETUP_SCRIPT="$4"
+ORIGIN_DIR="$5"
+
+rm -f -- "$TMPSCRIPT"
+cd -- "$WORKTREE_PATH"
+
+echo ""
+echo "  Worktree : $WORKTREE_PATH"
+echo "  Branch   : $BRANCH_NAME"
+
+if [[ -n "$SETUP_SCRIPT" ]]; then
+  echo "  Setup    : running $(basename "$SETUP_SCRIPT")"
+  echo ""
+  if [[ ! -x "$SETUP_SCRIPT" ]]; then
+    if [[ -w "$SETUP_SCRIPT" ]]; then
+      chmod +x "$SETUP_SCRIPT"
+    else
+      echo "Setup script is not executable. Password required to fix permissions."
+      sudo -v
+      sudo chmod +x "$SETUP_SCRIPT"
+    fi
+  fi
+  "$SETUP_SCRIPT" "$ORIGIN_DIR"
+else
+  echo "  Setup    : no worktree script found, skipping."
+  echo ""
+fi
+
+exec "${SHELL:-/bin/zsh}"
+EOF
+  chmod +x "$TMPSCRIPT"
+
+  LAUNCH_COMMAND="$(printf '%q ' "$TMPSCRIPT" "$TMPSCRIPT" "$WORKTREE_PATH" "$BRANCH_NAME" "$SETUP_SCRIPT" "$ORIGIN_DIR")"
+  LAUNCH_COMMAND="${LAUNCH_COMMAND% }"
+
+  zellij action new-tab --name "󰔱 $BRANCH_NAME"
+  sleep 0.3
+  zellij action write-chars "$LAUNCH_COMMAND"
+  zellij action write 10  # send Enter
+}
+
+# ---------------------------------------------------------------------------
+# Delete worktree
+# ---------------------------------------------------------------------------
+
+_wt_delete() {
+  local BRANCH_NAME="$1"
+
+  _wt_git_check
+
+  # If no branch name given, try to detect from current location
+  if [[ -z "$BRANCH_NAME" ]]; then
+    BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || true
+    if [[ -z "$BRANCH_NAME" || "$BRANCH_NAME" == "HEAD" ]]; then
+      echo "Error: branch name is required."
+      echo "Usage: $(basename "$0") del <branch-name>"
+      exit 1
+    fi
+    echo "Detected branch: $BRANCH_NAME"
+  fi
+
+  # Find the registered worktree for this branch
+  local WORKTREE_PATH
+  WORKTREE_PATH="$(_wt_worktree_path_for_branch "$BRANCH_NAME")"
+
+  if [[ -z "$WORKTREE_PATH" ]]; then
+    echo "Error: no worktree found for branch '$BRANCH_NAME'."
+    exit 1
+  fi
+
+  # Remove the worktree directory
+  echo "Removing worktree at $WORKTREE_PATH ..."
+  if ! git worktree remove "$WORKTREE_PATH" 2>/dev/null; then
+    printf "Worktree has uncommitted changes. Force remove? [y/N] "
+    local ans
+    read -r ans || true
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      git worktree remove --force "$WORKTREE_PATH"
+    else
+      echo "Aborted."
+      exit 1
+    fi
+  fi
+
+  # Check if the local branch still exists
+  if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+    echo "Branch '$BRANCH_NAME' no longer exists locally. Done."
+    return 0
+  fi
+
+  local DEFAULT_BRANCH
+  DEFAULT_BRANCH="$(_wt_default_branch)"
+
+  if _wt_is_merged "$BRANCH_NAME" "$DEFAULT_BRANCH"; then
+    echo "Branch '$BRANCH_NAME' is merged into '$DEFAULT_BRANCH' — deleting branch."
+    git branch -d "$BRANCH_NAME"
+    echo "Done."
+  else
+    echo ""
+    echo "Branch '$BRANCH_NAME' has not been merged into '$DEFAULT_BRANCH'."
+    printf "Delete the branch anyway? [y/N] "
+    local answer
+    read -r answer || true
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      git branch -D "$BRANCH_NAME"
+      echo "Branch deleted."
+    else
+      echo "Branch kept."
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+case "$1" in
+  help|-h|--help)
+    _wt_usage
+    ;;
+  del|delete)
+    shift
+    _wt_delete "$@"
+    ;;
+  new)
+    shift
+    _wt_new "$@"
+    ;;
+  *)
+    # Default: treat first arg as branch name for create
+    _wt_new "$@"
+    ;;
+esac
