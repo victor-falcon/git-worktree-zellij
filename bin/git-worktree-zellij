@@ -24,6 +24,7 @@ typeset -a WT_SETUP_SCRIPT_PATHS=(
 
 WT_DEFAULT_BRANCH="${WT_DEFAULT_BRANCH:-}"
 WT_WORKTREES_DIR="${WT_WORKTREES_DIR:-}"
+WT_SCRIPT_NAME="$(basename -- "$0")"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,11 +40,11 @@ _wt_git_check() {
 _wt_usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") <branch-name>
-  $(basename "$0") new <branch-name>
-  $(basename "$0") del <branch-name>
-  $(basename "$0") delete <branch-name>
-  $(basename "$0") help
+  $WT_SCRIPT_NAME <branch-name>
+  $WT_SCRIPT_NAME new <branch-name>
+  $WT_SCRIPT_NAME del <branch-name>
+  $WT_SCRIPT_NAME delete <branch-name>
+  $WT_SCRIPT_NAME help
 
 Config:
   WT_DEFAULT_BRANCH  Override the branch used for merged checks.
@@ -148,7 +149,7 @@ _wt_new() {
 
   if [[ -z "$BRANCH_NAME" ]]; then
     echo "Error: branch name is required."
-    echo "Usage: $(basename "$0") [new] <branch-name>"
+    echo "Usage: $WT_SCRIPT_NAME [new] <branch-name>"
     exit 1
   fi
 
@@ -253,7 +254,7 @@ _wt_delete() {
     BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || true
     if [[ -z "$BRANCH_NAME" || "$BRANCH_NAME" == "HEAD" ]]; then
       echo "Error: branch name is required."
-      echo "Usage: $(basename "$0") del <branch-name>"
+      echo "Usage: $WT_SCRIPT_NAME del <branch-name>"
       exit 1
     fi
     echo "Detected branch: $BRANCH_NAME"
