@@ -8,6 +8,7 @@ Small `zsh` helper to create and delete Git worktrees, with optional Zellij tab 
 - Deletes a worktree and optionally deletes the branch after merge checks
 - Opens the worktree in a new Zellij tab when run inside Zellij
 - Runs an optional repo-local setup script inside the new worktree
+- Changes the new Zellij shell into the worktree before running setup
 - Works from any subdirectory inside the Git repository
 
 ## Requirements

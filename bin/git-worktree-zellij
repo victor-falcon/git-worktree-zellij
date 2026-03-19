@@ -191,7 +191,7 @@ _wt_new() {
   done
 
   # Write a self-deleting temp script that zellij will run in the new tab.
-  local TMPSCRIPT LAUNCH_COMMAND
+  local TMPSCRIPT LAUNCH_COMMAND CD_COMMAND
   TMPSCRIPT="$(mktemp "${TMPDIR:-/tmp}/wt-setup.XXXXXX")"
   cat > "$TMPSCRIPT" <<'EOF'
 #!/usr/bin/env zsh
@@ -233,9 +233,13 @@ EOF
 
   LAUNCH_COMMAND="$(printf '%q ' "$TMPSCRIPT" "$TMPSCRIPT" "$WORKTREE_PATH" "$BRANCH_NAME" "$SETUP_SCRIPT" "$ORIGIN_DIR")"
   LAUNCH_COMMAND="${LAUNCH_COMMAND% }"
+  CD_COMMAND="cd -- $(printf '%q' "$WORKTREE_PATH")"
 
-  zellij action new-tab --name "󰔱 $BRANCH_NAME"
+  zellij action new-tab --cwd "$WORKTREE_PATH" --name "󰔱 $BRANCH_NAME"
   sleep 0.3
+  zellij action write-chars "$CD_COMMAND"
+  zellij action write 10  # send Enter
+  sleep 0.1
   zellij action write-chars "$LAUNCH_COMMAND"
   zellij action write 10  # send Enter
 }
