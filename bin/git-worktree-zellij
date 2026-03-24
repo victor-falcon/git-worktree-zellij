@@ -50,10 +50,17 @@ Config:
   WT_DEFAULT_BRANCH  Override the branch used for merged checks.
   WT_WORKTREES_DIR   Override the parent directory where worktrees are stored.
 
-Behavior:
+Behavior (new):
   - Creates worktrees under WT_WORKTREES_DIR/<repo-name>/<branch-name>
   - Defaults WT_WORKTREES_DIR to ../worktrees next to the repo root
   - Opens the worktree in a new Zellij tab when inside a Zellij session
+
+Behavior (del):
+  - Removes the worktree for the given branch (or the current branch if omitted)
+  - Prompts to force-remove if the worktree has uncommitted changes
+  - Asks whether to delete the local branch after worktree removal
+    - Merged branches default to Yes [Y/n], unmerged default to No [y/N]
+  - When running inside Zellij, offers to close the current tab
 EOF
 }
 
@@ -290,27 +297,63 @@ _wt_delete() {
   # Check if the local branch still exists
   if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
     echo "Branch '$BRANCH_NAME' no longer exists locally. Done."
+    # Offer to close the current Zellij tab
+    if [[ -n "${ZELLIJ:-}" ]]; then
+      printf "Close current Zellij tab? [y/N] "
+      local close_tab
+      read -r close_tab || true
+      if [[ "$close_tab" =~ ^[Yy]$ ]]; then
+        zellij action close-tab
+      fi
+    fi
     return 0
   fi
 
   local DEFAULT_BRANCH
   DEFAULT_BRANCH="$(_wt_default_branch)"
 
+  local is_merged=false
   if _wt_is_merged "$BRANCH_NAME" "$DEFAULT_BRANCH"; then
-    echo "Branch '$BRANCH_NAME' is merged into '$DEFAULT_BRANCH' — deleting branch."
-    git branch -d "$BRANCH_NAME"
-    echo "Done."
+    is_merged=true
+  fi
+
+  echo ""
+  if $is_merged; then
+    echo "Branch '$BRANCH_NAME' is merged into '$DEFAULT_BRANCH'."
+    printf "Delete the branch? [Y/n] "
   else
-    echo ""
     echo "Branch '$BRANCH_NAME' has not been merged into '$DEFAULT_BRANCH'."
     printf "Delete the branch anyway? [y/N] "
-    local answer
-    read -r answer || true
+  fi
+
+  local answer
+  read -r answer || true
+
+  if $is_merged; then
+    # Default is Yes for merged branches
+    if [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]; then
+      git branch -d "$BRANCH_NAME"
+      echo "Branch deleted."
+    else
+      echo "Branch kept."
+    fi
+  else
+    # Default is No for unmerged branches
     if [[ "$answer" =~ ^[Yy]$ ]]; then
       git branch -D "$BRANCH_NAME"
       echo "Branch deleted."
     else
       echo "Branch kept."
+    fi
+  fi
+
+  # Offer to close the current Zellij tab
+  if [[ -n "${ZELLIJ:-}" ]]; then
+    printf "Close current Zellij tab? [y/N] "
+    local close_tab
+    read -r close_tab || true
+    if [[ "$close_tab" =~ ^[Yy]$ ]]; then
+      zellij action close-tab
     fi
   fi
 }
