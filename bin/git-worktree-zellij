@@ -8,6 +8,7 @@
 #   git-worktree-new.sh <branch-name>          # create (default)
 #   git-worktree-new.sh new <branch-name>       # create
 #   git-worktree-new.sh new -c <branch-name>    # create in current tab
+#   git-worktree-new.sh <branch-name> -c        # create in current tab
 #   git-worktree-new.sh ls                      # list worktrees
 #   git-worktree-new.sh del <branch-name>       # delete
 #   git-worktree-new.sh delete <branch-name>    # delete
@@ -44,6 +45,7 @@ _wt_usage() {
 Usage:
   $WT_SCRIPT_NAME <branch-name>
   $WT_SCRIPT_NAME new [-c|--current-tab] <branch-name>
+  $WT_SCRIPT_NAME <branch-name> [-c|--current-tab]
   $WT_SCRIPT_NAME ls
   $WT_SCRIPT_NAME del <branch-name>
   $WT_SCRIPT_NAME delete <branch-name>
@@ -226,6 +228,7 @@ _wt_list() {
 
 _wt_new() {
   local CURRENT_TAB=false
+  local BRANCH_NAME=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -239,12 +242,16 @@ _wt_new() {
         exit 1
         ;;
       *)
-        break
+        if [[ -n "$BRANCH_NAME" ]]; then
+          echo "Error: unexpected argument '$1'."
+          echo "Usage: $WT_SCRIPT_NAME [new] [-c|--current-tab] <branch-name>"
+          exit 1
+        fi
+        BRANCH_NAME="$1"
+        shift
         ;;
     esac
   done
-
-  local BRANCH_NAME="$1"
 
   if [[ -z "$BRANCH_NAME" ]]; then
     echo "Error: branch name is required."

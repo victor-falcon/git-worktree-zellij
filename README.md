@@ -38,7 +38,9 @@ alias worktree="$HOME/Projects/git-worktree-zellij/bin/git-worktree-zellij"
 
 ```bash
 worktree <branch-name>
+worktree <branch-name> -c
 worktree new <branch-name>
+worktree new -c <branch-name>
 worktree del <branch-name>
 worktree delete <branch-name>
 worktree help
