@@ -10,8 +10,8 @@
 #   git-worktree-new.sh new -c <branch-name>    # create in current tab
 #   git-worktree-new.sh <branch-name> -c        # create in current tab
 #   git-worktree-new.sh ls                      # list worktrees
-#   git-worktree-new.sh del <branch-name>       # delete
-#   git-worktree-new.sh delete <branch-name>    # delete
+#   git-worktree-new.sh del [-f] [branch-name]  # delete
+#   git-worktree-new.sh delete [-f] [branch-name] # delete
 #   git-worktree-new.sh help                    # show help
 
 set -e
@@ -47,12 +47,13 @@ Usage:
   $WT_SCRIPT_NAME new [-c|--current-tab] <branch-name>
   $WT_SCRIPT_NAME <branch-name> [-c|--current-tab]
   $WT_SCRIPT_NAME ls
-  $WT_SCRIPT_NAME del <branch-name>
-  $WT_SCRIPT_NAME delete <branch-name>
+  $WT_SCRIPT_NAME del [-f|--force] [branch-name]
+  $WT_SCRIPT_NAME delete [-f|--force] [branch-name]
   $WT_SCRIPT_NAME help
 
 Options:
   -c, --current-tab  Reuse the current Zellij tab instead of opening a new one.
+  -f, --force        Skip the uncommitted-changes prompt when deleting a worktree.
 
 Config:
   WT_DEFAULT_BRANCH  Override the branch used for merged checks.
@@ -70,7 +71,7 @@ Behavior (ls):
 
 Behavior (del):
   - Removes the worktree for the given branch (or the current branch if omitted)
-  - Prompts to force-remove if the worktree has uncommitted changes
+  - Prompts to force-remove if the worktree has uncommitted changes, unless -f/--force is set
   - Asks whether to delete the local branch after worktree removal
     - Merged branches default to Yes [Y/n], unmerged default to No [y/N]
   - When running inside Zellij, offers to close the current tab
@@ -364,7 +365,31 @@ EOF
 # ---------------------------------------------------------------------------
 
 _wt_delete() {
-  local BRANCH_NAME="$1"
+  local FORCE=false
+  local BRANCH_NAME=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--force)
+        FORCE=true
+        shift
+        ;;
+      -*)
+        echo "Error: unknown option '$1'."
+        echo "Usage: $WT_SCRIPT_NAME del [-f|--force] [branch-name]"
+        exit 1
+        ;;
+      *)
+        if [[ -n "$BRANCH_NAME" ]]; then
+          echo "Error: unexpected argument '$1'."
+          echo "Usage: $WT_SCRIPT_NAME del [-f|--force] [branch-name]"
+          exit 1
+        fi
+        BRANCH_NAME="$1"
+        shift
+        ;;
+    esac
+  done
 
   _wt_git_check
 
@@ -373,7 +398,7 @@ _wt_delete() {
     BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || true
     if [[ -z "$BRANCH_NAME" || "$BRANCH_NAME" == "HEAD" ]]; then
       echo "Error: branch name is required."
-      echo "Usage: $WT_SCRIPT_NAME del <branch-name>"
+      echo "Usage: $WT_SCRIPT_NAME del [-f|--force] [branch-name]"
       exit 1
     fi
     echo "Detected branch: $BRANCH_NAME"
@@ -390,7 +415,9 @@ _wt_delete() {
 
   # Remove the worktree directory
   echo "Removing worktree at $WORKTREE_PATH ..."
-  if ! git worktree remove "$WORKTREE_PATH" 2>/dev/null; then
+  if $FORCE; then
+    git worktree remove --force "$WORKTREE_PATH"
+  elif ! git worktree remove "$WORKTREE_PATH" 2>/dev/null; then
     printf "Worktree has uncommitted changes. Force remove? [y/N] "
     local ans
     read -r ans || true
