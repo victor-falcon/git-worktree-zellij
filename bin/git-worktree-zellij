@@ -270,6 +270,8 @@ _wt_new() {
 
   mkdir -p "$(dirname "$WORKTREE_PATH")"
 
+  git fetch origin 2>/dev/null || echo "Warning: could not fetch from origin"
+
   if _wt_worktree_exists "$WORKTREE_PATH"; then
     echo "Worktree already exists at $WORKTREE_PATH — opening tab."
   elif [[ -e "$WORKTREE_PATH" ]]; then
@@ -278,7 +280,9 @@ _wt_new() {
   elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
     git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" 2>&1
   else
-    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" 2>&1
+    local DEFAULT_BRANCH
+    DEFAULT_BRANCH="$(_wt_default_branch)"
+    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "origin/$DEFAULT_BRANCH" 2>&1
   fi
 
   # Bail out gracefully when not inside a Zellij session
