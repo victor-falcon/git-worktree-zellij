@@ -8,6 +8,7 @@
 #   git-worktree-new.sh <branch-name>          # create (default)
 #   git-worktree-new.sh new <branch-name>       # create
 #   git-worktree-new.sh new -c <branch-name>    # create in current tab
+#   git-worktree-new.sh new --current <branch-name> # create in current tab
 #   git-worktree-new.sh <branch-name> -c        # create in current tab
 #   git-worktree-new.sh ls                      # list worktrees
 #   git-worktree-new.sh del [-f] [branch-name]  # delete
@@ -44,15 +45,16 @@ _wt_usage() {
   cat <<EOF
 Usage:
   $WT_SCRIPT_NAME <branch-name>
-  $WT_SCRIPT_NAME new [-c|--current-tab] <branch-name>
-  $WT_SCRIPT_NAME <branch-name> [-c|--current-tab]
+  $WT_SCRIPT_NAME new [-c|--current|--current-tab] <branch-name>
+  $WT_SCRIPT_NAME <branch-name> [-c|--current|--current-tab]
   $WT_SCRIPT_NAME ls
   $WT_SCRIPT_NAME del [-f|--force] [branch-name]
   $WT_SCRIPT_NAME delete [-f|--force] [branch-name]
   $WT_SCRIPT_NAME help
 
 Options:
-  -c, --current-tab  Reuse the current Zellij tab instead of opening a new one.
+  -c, --current, --current-tab
+                     Reuse the current Zellij tab instead of opening a new one.
   -f, --force        Skip the uncommitted-changes prompt when deleting a worktree.
 
 Config:
@@ -63,7 +65,7 @@ Behavior (new):
   - Creates worktrees under WT_WORKTREES_DIR/<repo-name>/<branch-name>
   - Defaults WT_WORKTREES_DIR to ../worktrees next to the repo root
   - Opens the worktree in a new Zellij tab when inside a Zellij session
-  - With -c/--current-tab, renames and reuses the current tab instead
+  - With -c/--current/--current-tab, reuses the current tab and asks before renaming it
 
 Behavior (ls):
   - Lists all worktrees for the current repository (excluding the main working tree)
@@ -233,19 +235,19 @@ _wt_new() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -c|--current-tab)
+      -c|--current|--current-tab)
         CURRENT_TAB=true
         shift
         ;;
       -*)
         echo "Error: unknown option '$1'."
-        echo "Usage: $WT_SCRIPT_NAME [new] [-c|--current-tab] <branch-name>"
+        echo "Usage: $WT_SCRIPT_NAME [new] [-c|--current|--current-tab] <branch-name>"
         exit 1
         ;;
       *)
         if [[ -n "$BRANCH_NAME" ]]; then
           echo "Error: unexpected argument '$1'."
-          echo "Usage: $WT_SCRIPT_NAME [new] [-c|--current-tab] <branch-name>"
+          echo "Usage: $WT_SCRIPT_NAME [new] [-c|--current|--current-tab] <branch-name>"
           exit 1
         fi
         BRANCH_NAME="$1"
@@ -256,7 +258,7 @@ _wt_new() {
 
   if [[ -z "$BRANCH_NAME" ]]; then
     echo "Error: branch name is required."
-    echo "Usage: $WT_SCRIPT_NAME [new] [-c|--current-tab] <branch-name>"
+    echo "Usage: $WT_SCRIPT_NAME [new] [-c|--current|--current-tab] <branch-name>"
     exit 1
   fi
 
@@ -347,7 +349,12 @@ EOF
   CD_COMMAND="cd -- $(printf '%q' "$WORKTREE_PATH")"
 
   if $CURRENT_TAB; then
-    zellij action rename-tab "󰔱 $BRANCH_NAME"
+    local rename_current_tab=""
+    printf "Rename current Zellij tab to '%s'? [y/N] " "󰔱 $BRANCH_NAME"
+    read -r rename_current_tab || true
+    if [[ "$rename_current_tab" =~ ^[Yy]$ ]]; then
+      zellij action rename-tab "󰔱 $BRANCH_NAME"
+    fi
     zellij action write-chars "$CD_COMMAND"
     zellij action write 10  # send Enter
     sleep 0.1

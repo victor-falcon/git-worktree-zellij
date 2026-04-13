@@ -40,8 +40,10 @@ alias worktree="$HOME/Projects/git-worktree-zellij/bin/git-worktree-zellij"
 ```bash
 worktree <branch-name>
 worktree <branch-name> -c
+worktree <branch-name> --current
 worktree new <branch-name>
 worktree new -c <branch-name>
+worktree new --current <branch-name>
 worktree del [-f] [branch-name]
 worktree delete [-f] [branch-name]
 worktree help
@@ -81,6 +83,7 @@ Environment variables:
 Delete options:
 
 - `-f`, `--force`: remove the worktree without prompting when it has uncommitted changes
+- `-c`, `--current`, `--current-tab`: reuse the current Zellij tab; when reusing, ask before renaming it
 
 Example:
 
