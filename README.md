@@ -95,6 +95,7 @@ export WT_WORKTREES_DIR="$HOME/Projects/worktrees"
 ## Notes
 
 - Branch deletion is cautious: merged branches are deleted normally, unmerged branches require confirmation
+- Before asking to delete a branch, the merge check refreshes `origin/<default-branch>` and prefers that ref when available
 - The squash-merge detection uses Git plumbing to compare branch changes before deletion
 - The script is designed for local developer workflows, not for server automation
 

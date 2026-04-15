@@ -111,6 +111,22 @@ _wt_default_branch() {
   echo "${branch:-main}"
 }
 
+_wt_merge_check_ref() {
+  local default_branch="$1"
+  local remote_ref="refs/remotes/origin/$default_branch"
+
+  if git remote get-url origin > /dev/null 2>&1; then
+    git fetch --quiet origin "$default_branch" > /dev/null 2>&1 || true
+  fi
+
+  if git show-ref --verify --quiet "$remote_ref"; then
+    echo "origin/$default_branch"
+    return 0
+  fi
+
+  echo "$default_branch"
+}
+
 # Returns 0 if the branch is fully merged (regular or squash) into default branch.
 _wt_is_merged() {
   local branch="$1" default_branch="$2"
@@ -472,20 +488,21 @@ _wt_delete() {
     return 0
   fi
 
-  local DEFAULT_BRANCH
+  local DEFAULT_BRANCH MERGE_CHECK_REF
   DEFAULT_BRANCH="$(_wt_default_branch)"
+  MERGE_CHECK_REF="$(_wt_merge_check_ref "$DEFAULT_BRANCH")"
 
   local is_merged=false
-  if _wt_is_merged "$BRANCH_NAME" "$DEFAULT_BRANCH"; then
+  if _wt_is_merged "$BRANCH_NAME" "$MERGE_CHECK_REF"; then
     is_merged=true
   fi
 
   echo ""
   if $is_merged; then
-    echo "Branch '$BRANCH_NAME' is merged into '$DEFAULT_BRANCH'."
+    echo "Branch '$BRANCH_NAME' is merged into '$MERGE_CHECK_REF'."
     printf "Delete the branch? [Y/n] "
   else
-    echo "Branch '$BRANCH_NAME' has not been merged into '$DEFAULT_BRANCH'."
+    echo "Branch '$BRANCH_NAME' has not been merged into '$MERGE_CHECK_REF'."
     printf "Delete the branch anyway? [y/N] "
   fi
 
