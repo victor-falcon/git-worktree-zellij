@@ -6,7 +6,7 @@ Small `zsh` helper to create and delete Git worktrees, with optional Zellij tab 
 
 - Creates a worktree for an existing or new branch
 - Deletes a worktree and optionally deletes the branch after merge checks
-- Supports `del|delete -f|--force` to skip the dirty-worktree prompt
+- Supports `del|delete -f|--force` to skip prompts, delete the branch, and close the current Zellij tab automatically
 - Opens the worktree in a new Zellij tab when run inside Zellij
 - Runs an optional repo-local setup script inside the new worktree
 - Changes the new Zellij shell into the worktree before running setup
@@ -82,7 +82,7 @@ Environment variables:
 
 Delete options:
 
-- `-f`, `--force`: remove the worktree without prompting when it has uncommitted changes
+- `-f`, `--force`: force-remove the worktree, delete the branch without asking, and close the current Zellij tab automatically
 - `-c`, `--current`, `--current-tab`: reuse the current Zellij tab; when reusing, ask before renaming it
 
 Example:
@@ -94,7 +94,8 @@ export WT_WORKTREES_DIR="$HOME/Projects/worktrees"
 
 ## Notes
 
-- Branch deletion is cautious: merged branches are deleted normally, unmerged branches require confirmation
+- Branch deletion is cautious by default: merged branches are deleted normally, unmerged branches require confirmation
+- With `-f/--force`, branch deletion is unconditional (`git branch -D`) and the current Zellij tab is closed automatically
 - Before asking to delete a branch, the merge check refreshes `origin/<default-branch>` and prefers that ref when available
 - The squash-merge detection uses Git plumbing to compare branch changes before deletion
 - The script is designed for local developer workflows, not for server automation
