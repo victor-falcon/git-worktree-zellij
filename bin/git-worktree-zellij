@@ -46,6 +46,16 @@ _wt_close_current_zellij_tab() {
   zellij action close-tab
 }
 
+_wt_prompt_close_zellij_tab() {
+  [[ -n "${ZELLIJ:-}" ]] || return 0
+  printf "Close current Zellij tab? [Y/n] "
+  local ans
+  read -r ans || true
+  if [[ -z "$ans" || "$ans" =~ ^[Yy]$ ]]; then
+    _wt_close_current_zellij_tab
+  fi
+}
+
 _wt_usage() {
   cat <<EOF
 Usage:
@@ -60,8 +70,9 @@ Usage:
 Options:
   -c, --current, --current-tab
                      Reuse the current Zellij tab instead of opening a new one.
-  -f, --force        Skip prompts when deleting: force-remove the worktree,
-                     delete the branch, and close the current Zellij tab.
+  -f, --force        Skip prompts when deleting: force-remove the worktree
+                     and delete the branch. Always prompts before closing
+                     the current Zellij tab (default Yes).
 
 Config:
   WT_DEFAULT_BRANCH  Override the branch used for merged checks.
@@ -82,8 +93,8 @@ Behavior (del):
   - Prompts to force-remove if the worktree has uncommitted changes, unless -f/--force is set
   - Asks whether to delete the local branch after worktree removal
     - Merged branches default to Yes [Y/n], unmerged default to No [y/N]
-  - With -f/--force, also deletes the branch without asking and closes the current Zellij tab automatically
-  - When running inside Zellij, offers to close the current tab unless -f/--force is set
+  - With -f/--force, also deletes the branch without asking
+  - When running inside Zellij, always prompts before closing the current tab (default Yes: Enter or y closes, n keeps)
 EOF
 }
 
@@ -483,23 +494,14 @@ _wt_delete() {
   # Check if the local branch still exists
   if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
     echo "Branch '$BRANCH_NAME' no longer exists locally. Done."
-    if $FORCE; then
-      _wt_close_current_zellij_tab
-    elif [[ -n "${ZELLIJ:-}" ]]; then
-      printf "Close current Zellij tab? [y/N] "
-      local close_tab
-      read -r close_tab || true
-      if [[ "$close_tab" =~ ^[Yy]$ ]]; then
-        _wt_close_current_zellij_tab
-      fi
-    fi
+    _wt_prompt_close_zellij_tab
     return 0
   fi
 
   if $FORCE; then
     git branch -D "$BRANCH_NAME"
     echo "Branch deleted."
-    _wt_close_current_zellij_tab
+    _wt_prompt_close_zellij_tab
     return 0
   fi
 
@@ -543,14 +545,7 @@ _wt_delete() {
   fi
 
   # Offer to close the current Zellij tab
-  if [[ -n "${ZELLIJ:-}" ]]; then
-    printf "Close current Zellij tab? [y/N] "
-    local close_tab
-    read -r close_tab || true
-    if [[ "$close_tab" =~ ^[Yy]$ ]]; then
-      _wt_close_current_zellij_tab
-    fi
-  fi
+  _wt_prompt_close_zellij_tab
 }
 
 # ---------------------------------------------------------------------------
