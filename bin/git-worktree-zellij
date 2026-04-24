@@ -327,7 +327,7 @@ _wt_new() {
   else
     local DEFAULT_BRANCH
     DEFAULT_BRANCH="$(_wt_default_branch)"
-    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "origin/$DEFAULT_BRANCH" 2>&1
+    git worktree add -b "$BRANCH_NAME" --no-track "$WORKTREE_PATH" "origin/$DEFAULT_BRANCH" 2>&1
   fi
 
   # Bail out gracefully when not inside a Zellij session
