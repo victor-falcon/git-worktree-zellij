@@ -210,6 +210,23 @@ _wt_worktree_path_for_branch() {
 # List worktrees
 # ---------------------------------------------------------------------------
 
+_wt_open_existing_tab() {
+  local worktree_path="$1" branch_name="$2"
+
+  if [[ -z "${ZELLIJ:-}" ]]; then
+    echo "Not in a Zellij session — navigate manually to: $worktree_path"
+    return 0
+  fi
+
+  local CD_COMMAND
+  CD_COMMAND="cd -- $(printf '%q' "$worktree_path")"
+
+  zellij action new-tab --cwd "$worktree_path" --name "󰔱 $branch_name"
+  sleep 0.3
+  zellij action write-chars "$CD_COMMAND"
+  zellij action write 10  # send Enter
+}
+
 _wt_list() {
   _wt_git_check
 
@@ -250,6 +267,31 @@ _wt_list() {
 
   if (( ${#paths[@]} == 0 )); then
     echo "No worktrees found (other than the main working tree)."
+    return 0
+  fi
+
+  # Interactive picker via fzf when available and on a TTY
+  if [[ -t 0 && -t 1 ]] && command -v fzf > /dev/null 2>&1; then
+    local i fzf_input="" selection selected_path selected_branch
+    for (( i = 1; i <= ${#paths[@]}; i++ )); do
+      local short_head="${heads[$i]:0:8}"
+      fzf_input+="${branches[$i]}\t${short_head}\t${paths[$i]}\n"
+    done
+
+    selection="$(printf "$fzf_input" | fzf \
+      --delimiter='\t' \
+      --with-nth=1,2,3 \
+      --prompt="worktree> " \
+      --header="Pick a worktree to open in a new Zellij tab" \
+      --height=40% \
+      --reverse \
+      --ansi)" || return 0
+
+    [[ -z "$selection" ]] && return 0
+
+    selected_branch="${selection%%$'\t'*}"
+    selected_path="${selection##*$'\t'}"
+    _wt_open_existing_tab "$selected_path" "$selected_branch"
     return 0
   fi
 
