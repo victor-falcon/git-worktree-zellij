@@ -16,6 +16,7 @@ Small `zsh` helper to create and delete Git worktrees, with optional Zellij tab 
 
 - `git`
 - `zsh`
+- `fzf`
 - `zellij` for automatic tab opening
 
 The script still works without Zellij; it prints the target path and exits.
@@ -38,30 +39,15 @@ alias worktree="$HOME/Projects/git-worktree-zellij/bin/git-worktree-zellij"
 ## Usage
 
 ```bash
-worktree <branch-name>
-worktree <branch-name> -c
-worktree <branch-name> --current
-worktree new <branch-name>
-worktree new -c <branch-name>
-worktree new --current <branch-name>
-worktree del [-f] [branch-name]
-worktree delete [-f] [branch-name]
+worktree ls                              # List existing worktrees with fzf and open then in a zellij tab
+
+worktree <branch-name>               # Create a new worktree
+worktree -c <branch-name>            # Create a new worktree, on current zellij tab
+worktree --current <branch-name>     # Same
+
+worktree del [-f]                    # Delete current worktree, it will ask you before deleting branch
+
 worktree help
-```
-
-## Worktree Layout
-
-By default, worktrees are created next to the repo root under:
-
-```text
-../worktrees/<repo-name>/<branch-name>
-```
-
-Example:
-
-```text
-~/Projects/my-app
-~/Projects/worktrees/my-app/feature/login
 ```
 
 ## Optional Setup Scripts
