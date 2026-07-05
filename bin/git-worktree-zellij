@@ -41,19 +41,178 @@ _wt_git_check() {
   fi
 }
 
-_wt_close_current_zellij_tab() {
-  [[ -n "${ZELLIJ:-}" ]] || return 0
-  zellij action close-tab
+# Which terminal multiplexer are we inside? Echoes "zellij", "muxy", or "".
+_wt_mux() {
+  if [[ -n "${ZELLIJ:-}" ]]; then
+    echo zellij
+  elif [[ -n "${MUXY_PANE_ID:-}" ]]; then
+    echo muxy
+  fi
 }
 
-_wt_prompt_close_zellij_tab() {
-  [[ -n "${ZELLIJ:-}" ]] || return 0
-  printf "Close current Zellij tab? [Y/n] "
+# muxy new-tab returns a *tab* id, but send/rename/close-pane need the *pane*
+# id. Diff `list-panes` (tab-separated, id in column 1) around the call to find
+# the newly created pane, and echo it.
+# ponytail: assumes this is the only pane created in the interval — fine for interactive use.
+_wt_muxy_new_pane() {
+  local before after pane
+  before="$(muxy list-panes 2>/dev/null | cut -f1 | sort)"
+  muxy new-tab > /dev/null 2>&1 || return 1
+  sleep 0.4
+  after="$(muxy list-panes 2>/dev/null | cut -f1 | sort)"
+  pane="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -1)"
+  [[ -n "$pane" ]] || return 1
+  printf '%s\n' "$pane"
+}
+
+# Open <cwd> in a new tab named <name>, then cd and optionally run <launch>.
+_wt_open_tab() {
+  local cwd="$1" name="$2" launch="${3:-}"
+  local cd_cmd
+  cd_cmd="cd -- $(printf '%q' "$cwd")"
+
+  case "$(_wt_mux)" in
+    zellij)
+      zellij action new-tab --cwd "$cwd" --name "$name"
+      sleep 0.3
+      zellij action write-chars "$cd_cmd"
+      zellij action write 10  # send Enter
+      if [[ -n "$launch" ]]; then
+        sleep 0.1
+        zellij action write-chars "$launch"
+        zellij action write 10  # send Enter
+      fi
+      ;;
+    muxy)
+      local pane
+      pane="$(_wt_muxy_new_pane)" || {
+        echo "Could not create a Muxy tab — navigate manually to: $cwd"
+        return 1
+      }
+      muxy rename-pane --pane "$pane" "$name" > /dev/null 2>&1 || true
+      muxy send --pane "$pane" "$cd_cmd"
+      muxy send-keys --pane "$pane" Enter
+      if [[ -n "$launch" ]]; then
+        sleep 0.1
+        muxy send --pane "$pane" "$launch"
+        muxy send-keys --pane "$pane" Enter
+      fi
+      ;;
+    *)
+      echo "Not in a Zellij or Muxy session — navigate manually to: $cwd"
+      return 1
+      ;;
+  esac
+}
+
+# Reuse the current tab/pane: prompt to rename, then cd and run <launch>.
+_wt_use_current_tab() {
+  local cwd="$1" name="$2" launch="$3"
+  local cd_cmd ans=""
+  cd_cmd="cd -- $(printf '%q' "$cwd")"
+
+  case "$(_wt_mux)" in
+    zellij)
+      printf "Rename current Zellij tab to '%s'? [y/N] " "$name"
+      read -r ans || true
+      [[ "$ans" =~ ^[Yy]$ ]] && zellij action rename-tab "$name"
+      zellij action write-chars "$cd_cmd"
+      zellij action write 10  # send Enter
+      sleep 0.1
+      zellij action write-chars "$launch"
+      zellij action write 10  # send Enter
+      ;;
+    muxy)
+      printf "Rename current Muxy tab to '%s'? [y/N] " "$name"
+      read -r ans || true
+      [[ "$ans" =~ ^[Yy]$ ]] && muxy rename-pane --pane "$MUXY_PANE_ID" "$name" > /dev/null 2>&1
+      muxy send --pane "$MUXY_PANE_ID" "$cd_cmd"
+      muxy send-keys --pane "$MUXY_PANE_ID" Enter
+      sleep 0.1
+      muxy send --pane "$MUXY_PANE_ID" "$launch"
+      muxy send-keys --pane "$MUXY_PANE_ID" Enter
+      ;;
+    *)
+      echo "Not in a Zellij or Muxy session — navigate manually to: $cwd"
+      return 1
+      ;;
+  esac
+}
+
+_wt_close_current_tab() {
+  case "$(_wt_mux)" in
+    zellij) zellij action close-tab ;;
+    muxy)   muxy close-pane --pane "$MUXY_PANE_ID" ;;
+  esac
+}
+
+_wt_prompt_close_tab() {
+  local mux
+  mux="$(_wt_mux)"
+  [[ -n "$mux" ]] || return 0
+  local label="Zellij"
+  [[ "$mux" == muxy ]] && label="Muxy"
+  printf "Close current %s tab? [Y/n] " "$label"
   local ans
   read -r ans || true
   if [[ -z "$ans" || "$ans" =~ ^[Yy]$ ]]; then
-    _wt_close_current_zellij_tab
+    _wt_close_current_tab
   fi
+}
+
+# Create (or reuse) the worktree via the Muxy CLI so it lands in Muxy's
+# configured location (muxy.general.defaultWorktreeParentPath) and gets a tab.
+# Echoes the worktree path. create-worktree output is tab-separated:
+# "ok<TAB><id><TAB><name><TAB><path><TAB><branch>".
+_wt_muxy_create_worktree() {
+  local branch="$1" out existing default_branch
+  existing="$(_wt_worktree_path_for_branch "$branch")"
+  if [[ -n "$existing" ]]; then
+    muxy switch-worktree "$branch" > /dev/null 2>&1 || true
+    printf '%s\n' "$existing"
+    return 0
+  fi
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    out="$(muxy create-worktree "$branch" --existing 2>&1)"
+  else
+    default_branch="$(_wt_default_branch)"
+    out="$(muxy create-worktree "$branch" --base "origin/$default_branch" 2>&1)"
+    # --base origin/<default> leaves the branch tracking origin; drop it to
+    # match the non-Muxy path (git worktree add --no-track).
+    [[ "$out" == ok* ]] && git branch --unset-upstream "$branch" 2>/dev/null || true
+  fi
+  if [[ "$out" != ok* ]]; then
+    echo "muxy create-worktree failed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out" | cut -f4
+}
+
+# Echo the id of the Muxy pane whose cwd is <target> (the tab create-worktree
+# opened). Retries since the tab appears asynchronously.
+# NB: never name a local "path" in zsh — it is tied to $PATH.
+_wt_muxy_pane_for_path() {
+  local target="$1" pane i
+  for i in {1..10}; do
+    pane="$(muxy list-panes 2>/dev/null | awk -F'\t' -v p="$target" '$3==p {print $1; exit}')"
+    [[ -n "$pane" ]] && { printf '%s\n' "$pane"; return 0; }
+    sleep 0.2
+  done
+  return 1
+}
+
+# Focus <pane>'s worktree so its terminal surface renders (muxy send only
+# reaches a visible pane), wait until it is ready, then run <launch>.
+# Muxy already names the tab after the worktree, so we don't rename it.
+_wt_muxy_run_in_pane() {
+  local pane="$1" launch="$2" branch="$3" i
+  [[ -n "$branch" ]] && muxy switch-worktree "$branch" > /dev/null 2>&1 || true
+  for i in {1..25}; do
+    muxy read-screen --pane "$pane" --lines 1 > /dev/null 2>&1 && break
+    sleep 0.2
+  done
+  muxy send --pane "$pane" "$launch"
+  muxy send-keys --pane "$pane" Enter
 }
 
 _wt_usage() {
@@ -69,20 +228,24 @@ Usage:
 
 Options:
   -c, --current, --current-tab
-                     Reuse the current Zellij tab instead of opening a new one.
+                     Reuse the current tab instead of opening a new one.
   -f, --force        Skip prompts when deleting: force-remove the worktree
                      and delete the branch. Always prompts before closing
-                     the current Zellij tab (default Yes).
+                     the current tab (default Yes).
 
 Config:
   WT_DEFAULT_BRANCH  Override the branch used for merged checks.
   WT_WORKTREES_DIR   Override the parent directory where worktrees are stored.
 
 Behavior (new):
-  - Creates worktrees under WT_WORKTREES_DIR/<repo-name>/<branch-name>
-  - Defaults WT_WORKTREES_DIR to ../worktrees next to the repo root
-  - Opens the worktree in a new Zellij tab when inside a Zellij session
-  - With -c/--current/--current-tab, reuses the current tab and asks before renaming it
+  - Under Zellij (or no multiplexer): creates worktrees under
+    WT_WORKTREES_DIR/<repo-name>/<branch-name>, defaulting WT_WORKTREES_DIR to
+    ../worktrees next to the repo root, and opens a new Zellij tab
+  - Under Muxy: delegates to `muxy create-worktree`, so the worktree lands in
+    Muxy's configured location (muxy.general.defaultWorktreeParentPath) and
+    opens in a Muxy tab; WT_WORKTREES_DIR and -c/--current are ignored
+  - With -c/--current/--current-tab (Zellij only), reuses the current tab and
+    asks before renaming it
 
 Behavior (ls):
   - Lists all worktrees for the current repository (excluding the main working tree)
@@ -94,7 +257,9 @@ Behavior (del):
   - Asks whether to delete the local branch after worktree removal
     - Merged branches default to Yes [Y/n], unmerged default to No [y/N]
   - With -f/--force, also deletes the branch without asking
-  - When running inside Zellij, always prompts before closing the current tab (default Yes: Enter or y closes, n keeps)
+  - Under Muxy, runs `muxy refresh-worktrees` after removal (Muxy has no
+    delete-worktree command) so its worktree list stays in sync
+  - When running inside Zellij or Muxy, always prompts before closing the current tab (default Yes: Enter or y closes, n keeps)
 EOF
 }
 
@@ -212,19 +377,7 @@ _wt_worktree_path_for_branch() {
 
 _wt_open_existing_tab() {
   local worktree_path="$1" branch_name="$2"
-
-  if [[ -z "${ZELLIJ:-}" ]]; then
-    echo "Not in a Zellij session — navigate manually to: $worktree_path"
-    return 0
-  fi
-
-  local CD_COMMAND
-  CD_COMMAND="cd -- $(printf '%q' "$worktree_path")"
-
-  zellij action new-tab --cwd "$worktree_path" --name "󰔱 $branch_name"
-  sleep 0.3
-  zellij action write-chars "$CD_COMMAND"
-  zellij action write 10  # send Enter
+  _wt_open_tab "$worktree_path" "󰔱 $branch_name" ""
 }
 
 _wt_list() {
@@ -282,7 +435,7 @@ _wt_list() {
       --delimiter='\t' \
       --with-nth=1,2,3 \
       --prompt="worktree> " \
-      --header="Pick a worktree to open in a new Zellij tab" \
+      --header="Pick a worktree to open in a new tab" \
       --height=40% \
       --reverse \
       --ansi)" || return 0
@@ -349,47 +502,69 @@ _wt_new() {
 
   _wt_git_check
 
-  local ORIGIN_DIR FOLDER_NAME WORKTREE_ROOT WORKTREE_PATH
+  local mux ORIGIN_DIR FOLDER_NAME WORKTREE_PATH="" TARGET_PANE=""
+  mux="$(_wt_mux)"
   ORIGIN_DIR="$(_wt_repo_root)"
   FOLDER_NAME="$(basename "$ORIGIN_DIR")"
-  WORKTREE_ROOT="${WT_WORKTREES_DIR:-$(dirname "$ORIGIN_DIR")/worktrees}"
-  WORKTREE_PATH="$WORKTREE_ROOT/$FOLDER_NAME/$BRANCH_NAME"
 
-  mkdir -p "$(dirname "$WORKTREE_PATH")"
-
-  git fetch origin 2>/dev/null || echo "Warning: could not fetch from origin"
-
-  if _wt_worktree_exists "$WORKTREE_PATH"; then
-    echo "Worktree already exists at $WORKTREE_PATH — opening tab."
-  elif [[ -e "$WORKTREE_PATH" ]]; then
-    echo "Error: path already exists but is not a registered worktree: $WORKTREE_PATH"
-    exit 1
-  elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-    git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" 2>&1
+  if [[ "$mux" == muxy ]]; then
+    # Delegate creation to Muxy so the worktree lands in its configured
+    # location and opens in a Muxy tab. -c/--current has no effect here.
+    git fetch origin 2>/dev/null || echo "Warning: could not fetch from origin"
+    WORKTREE_PATH="$(_wt_muxy_create_worktree "$BRANCH_NAME")" || exit 1
+    TARGET_PANE="$(_wt_muxy_pane_for_path "$WORKTREE_PATH")" || true
   else
-    local DEFAULT_BRANCH
-    DEFAULT_BRANCH="$(_wt_default_branch)"
-    git worktree add -b "$BRANCH_NAME" --no-track "$WORKTREE_PATH" "origin/$DEFAULT_BRANCH" 2>&1
-  fi
+    local WORKTREE_ROOT
+    WORKTREE_ROOT="${WT_WORKTREES_DIR:-$(dirname "$ORIGIN_DIR")/worktrees}"
+    WORKTREE_PATH="$WORKTREE_ROOT/$FOLDER_NAME/$BRANCH_NAME"
 
-  # Bail out gracefully when not inside a Zellij session
-  if [[ -z "${ZELLIJ:-}" ]]; then
-    echo "Not in a Zellij session — navigate manually to: $WORKTREE_PATH"
-    exit 0
-  fi
+    mkdir -p "$(dirname "$WORKTREE_PATH")"
 
-  # Pick a setup script if one exists in the origin repo
-  local SETUP_SCRIPT=""
-  local relative_setup_script
-  for relative_setup_script in "${WT_SETUP_SCRIPT_PATHS[@]}"; do
-    if [[ -f "$ORIGIN_DIR/$relative_setup_script" ]]; then
-      SETUP_SCRIPT="$WORKTREE_PATH/$relative_setup_script"
-      break
+    git fetch origin 2>/dev/null || echo "Warning: could not fetch from origin"
+
+    if _wt_worktree_exists "$WORKTREE_PATH"; then
+      echo "Worktree already exists at $WORKTREE_PATH — opening tab."
+    elif [[ -e "$WORKTREE_PATH" ]]; then
+      echo "Error: path already exists but is not a registered worktree: $WORKTREE_PATH"
+      exit 1
+    elif git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+      git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" 2>&1
+    else
+      local DEFAULT_BRANCH
+      DEFAULT_BRANCH="$(_wt_default_branch)"
+      git worktree add -b "$BRANCH_NAME" --no-track "$WORKTREE_PATH" "origin/$DEFAULT_BRANCH" 2>&1
     fi
-  done
 
-  # Write a self-deleting temp script that zellij will run in the new tab.
-  local TMPSCRIPT LAUNCH_COMMAND CD_COMMAND
+    # Bail out gracefully when not inside a supported multiplexer session
+    if [[ -z "$mux" ]]; then
+      echo "Not in a Zellij or Muxy session — navigate manually to: $WORKTREE_PATH"
+      exit 0
+    fi
+  fi
+
+  # Personal per-repo override, looked up by repo folder name under
+  # ~/.config/worktree-setup/<repo>.sh. Lives outside the repo, so it is never
+  # tracked and is reachable from a fresh worktree. Takes priority over the
+  # in-repo scripts. Override the dir with WT_PERSONAL_SETUP_DIR.
+  local SETUP_SCRIPT=""
+  local personal_setup="${WT_PERSONAL_SETUP_DIR:-$HOME/.config/worktree-setup}/$FOLDER_NAME.sh"
+  if [[ -f "$personal_setup" ]]; then
+    SETUP_SCRIPT="$personal_setup"
+  fi
+
+  # Otherwise pick a setup script if one exists in the origin repo
+  local relative_setup_script
+  if [[ -z "$SETUP_SCRIPT" ]]; then
+    for relative_setup_script in "${WT_SETUP_SCRIPT_PATHS[@]}"; do
+      if [[ -f "$ORIGIN_DIR/$relative_setup_script" ]]; then
+        SETUP_SCRIPT="$WORKTREE_PATH/$relative_setup_script"
+        break
+      fi
+    done
+  fi
+
+  # Write a self-deleting temp script the multiplexer will run in the new tab.
+  local TMPSCRIPT LAUNCH_COMMAND
   TMPSCRIPT="$(mktemp "${TMPDIR:-/tmp}/wt-setup.XXXXXX")"
   cat > "$TMPSCRIPT" <<'EOF'
 #!/usr/bin/env zsh
@@ -431,28 +606,18 @@ EOF
 
   LAUNCH_COMMAND="$(printf '%q ' "$TMPSCRIPT" "$TMPSCRIPT" "$WORKTREE_PATH" "$BRANCH_NAME" "$SETUP_SCRIPT" "$ORIGIN_DIR")"
   LAUNCH_COMMAND="${LAUNCH_COMMAND% }"
-  CD_COMMAND="cd -- $(printf '%q' "$WORKTREE_PATH")"
 
-  if $CURRENT_TAB; then
-    local rename_current_tab=""
-    printf "Rename current Zellij tab to '%s'? [y/N] " "󰔱 $BRANCH_NAME"
-    read -r rename_current_tab || true
-    if [[ "$rename_current_tab" =~ ^[Yy]$ ]]; then
-      zellij action rename-tab "󰔱 $BRANCH_NAME"
+  if [[ "$mux" == muxy ]]; then
+    # Muxy already opened the tab in the new worktree; just run setup in it.
+    if [[ -n "$TARGET_PANE" ]]; then
+      _wt_muxy_run_in_pane "$TARGET_PANE" "$LAUNCH_COMMAND" "$BRANCH_NAME"
+    else
+      echo "Worktree ready at $WORKTREE_PATH — could not locate its Muxy pane to run setup."
     fi
-    zellij action write-chars "$CD_COMMAND"
-    zellij action write 10  # send Enter
-    sleep 0.1
-    zellij action write-chars "$LAUNCH_COMMAND"
-    zellij action write 10  # send Enter
+  elif $CURRENT_TAB; then
+    _wt_use_current_tab "$WORKTREE_PATH" "󰔱 $BRANCH_NAME" "$LAUNCH_COMMAND"
   else
-    zellij action new-tab --cwd "$WORKTREE_PATH" --name "󰔱 $BRANCH_NAME"
-    sleep 0.3
-    zellij action write-chars "$CD_COMMAND"
-    zellij action write 10  # send Enter
-    sleep 0.1
-    zellij action write-chars "$LAUNCH_COMMAND"
-    zellij action write 10  # send Enter
+    _wt_open_tab "$WORKTREE_PATH" "󰔱 $BRANCH_NAME" "$LAUNCH_COMMAND"
   fi
 }
 
@@ -533,17 +698,20 @@ _wt_delete() {
     fi
   fi
 
+  # Muxy has no delete-worktree command; sync its list after the git removal.
+  [[ "$(_wt_mux)" == muxy ]] && muxy refresh-worktrees > /dev/null 2>&1 || true
+
   # Check if the local branch still exists
   if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
     echo "Branch '$BRANCH_NAME' no longer exists locally. Done."
-    _wt_prompt_close_zellij_tab
+    _wt_prompt_close_tab
     return 0
   fi
 
   if $FORCE; then
     git branch -D "$BRANCH_NAME"
     echo "Branch deleted."
-    _wt_prompt_close_zellij_tab
+    _wt_prompt_close_tab
     return 0
   fi
 
@@ -586,8 +754,8 @@ _wt_delete() {
     fi
   fi
 
-  # Offer to close the current Zellij tab
-  _wt_prompt_close_zellij_tab
+  # Offer to close the current tab
+  _wt_prompt_close_tab
 }
 
 # ---------------------------------------------------------------------------
