@@ -11,6 +11,7 @@
 #   git-worktree-new.sh new --current <branch-name> # create in current tab
 #   git-worktree-new.sh <branch-name> -c        # create in current tab
 #   git-worktree-new.sh ls                      # list worktrees
+#   git-worktree-new.sh -s                       # run setup in current worktree
 #   git-worktree-new.sh del [-f] [branch-name]  # delete
 #   git-worktree-new.sh delete [-f] [branch-name] # delete
 #   git-worktree-new.sh help                    # show help
@@ -222,6 +223,7 @@ Usage:
   $WT_SCRIPT_NAME new [-c|--current|--current-tab] <branch-name>
   $WT_SCRIPT_NAME <branch-name> [-c|--current|--current-tab]
   $WT_SCRIPT_NAME ls
+  $WT_SCRIPT_NAME -s|--setup|setup
   $WT_SCRIPT_NAME del [-f|--force] [branch-name]
   $WT_SCRIPT_NAME delete [-f|--force] [branch-name]
   $WT_SCRIPT_NAME help
@@ -250,6 +252,10 @@ Behavior (new):
 Behavior (ls):
   - Lists all worktrees for the current repository (excluding the main working tree)
   - Shows branch name, short commit hash, and path for each worktree
+
+Behavior (-s/--setup):
+  - Run from inside an already-created worktree; runs its setup script in place
+    (same lookup as new: personal override, then in-repo scripts). No new tab.
 
 Behavior (del):
   - Removes the worktree for the given branch (or the current branch if omitted)
@@ -464,6 +470,44 @@ _wt_list() {
 }
 
 # ---------------------------------------------------------------------------
+# Setup script lookup
+# ---------------------------------------------------------------------------
+
+# Echo the setup script to run for a worktree, or nothing if none exists.
+# Personal per-repo override (~/.config/worktree-setup/<repo>.sh) wins over the
+# in-repo scripts; in-repo matches are looked up under <origin_dir> but returned
+# as their <worktree_path> copy.
+_wt_find_setup_script() {
+  local origin_dir="$1" folder_name="$2" worktree_path="$3"
+  local personal="${WT_PERSONAL_SETUP_DIR:-$HOME/.config/worktree-setup}/$folder_name.sh"
+  if [[ -f "$personal" ]]; then
+    printf '%s\n' "$personal"
+    return 0
+  fi
+  local relative
+  for relative in "${WT_SETUP_SCRIPT_PATHS[@]}"; do
+    if [[ -f "$origin_dir/$relative" ]]; then
+      printf '%s\n' "$worktree_path/$relative"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# Make <script> executable, using sudo only when we don't own it.
+_wt_ensure_executable() {
+  local script="$1"
+  [[ -x "$script" ]] && return 0
+  if [[ -w "$script" ]]; then
+    chmod +x "$script"
+  else
+    echo "Setup script is not executable. Password required to fix permissions."
+    sudo -v
+    sudo chmod +x "$script"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Create worktree
 # ---------------------------------------------------------------------------
 
@@ -542,26 +586,8 @@ _wt_new() {
     fi
   fi
 
-  # Personal per-repo override, looked up by repo folder name under
-  # ~/.config/worktree-setup/<repo>.sh. Lives outside the repo, so it is never
-  # tracked and is reachable from a fresh worktree. Takes priority over the
-  # in-repo scripts. Override the dir with WT_PERSONAL_SETUP_DIR.
-  local SETUP_SCRIPT=""
-  local personal_setup="${WT_PERSONAL_SETUP_DIR:-$HOME/.config/worktree-setup}/$FOLDER_NAME.sh"
-  if [[ -f "$personal_setup" ]]; then
-    SETUP_SCRIPT="$personal_setup"
-  fi
-
-  # Otherwise pick a setup script if one exists in the origin repo
-  local relative_setup_script
-  if [[ -z "$SETUP_SCRIPT" ]]; then
-    for relative_setup_script in "${WT_SETUP_SCRIPT_PATHS[@]}"; do
-      if [[ -f "$ORIGIN_DIR/$relative_setup_script" ]]; then
-        SETUP_SCRIPT="$WORKTREE_PATH/$relative_setup_script"
-        break
-      fi
-    done
-  fi
+  local SETUP_SCRIPT
+  SETUP_SCRIPT="$(_wt_find_setup_script "$ORIGIN_DIR" "$FOLDER_NAME" "$WORKTREE_PATH")"
 
   # Write a self-deleting temp script the multiplexer will run in the new tab.
   local TMPSCRIPT LAUNCH_COMMAND
@@ -759,12 +785,46 @@ _wt_delete() {
 }
 
 # ---------------------------------------------------------------------------
+# Run setup in the current worktree
+# ---------------------------------------------------------------------------
+
+# Already inside a worktree: locate its setup script and run it in place. No
+# multiplexer, no new tab — the shell is already where it needs to be.
+_wt_setup() {
+  _wt_git_check
+
+  local WORKTREE_PATH ORIGIN_DIR FOLDER_NAME SETUP_SCRIPT
+  WORKTREE_PATH="$(_wt_repo_root)"
+  ORIGIN_DIR="$(_wt_common_root)" || ORIGIN_DIR="$WORKTREE_PATH"
+  FOLDER_NAME="$(basename "$ORIGIN_DIR")"
+
+  SETUP_SCRIPT="$(_wt_find_setup_script "$ORIGIN_DIR" "$FOLDER_NAME" "$WORKTREE_PATH")"
+
+  if [[ -z "$SETUP_SCRIPT" ]]; then
+    echo "No worktree setup script found for '$FOLDER_NAME'."
+    exit 1
+  fi
+
+  cd -- "$WORKTREE_PATH"
+  echo ""
+  echo "  Worktree : $WORKTREE_PATH"
+  echo "  Setup    : running $(basename "$SETUP_SCRIPT")"
+  echo ""
+  _wt_ensure_executable "$SETUP_SCRIPT"
+  "$SETUP_SCRIPT" "$ORIGIN_DIR"
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
 case "$1" in
   help|-h|--help)
     _wt_usage
+    ;;
+  -s|--setup|setup)
+    shift
+    _wt_setup "$@"
     ;;
   ls|list)
     shift
