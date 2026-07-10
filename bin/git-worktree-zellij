@@ -42,9 +42,11 @@ _wt_git_check() {
   fi
 }
 
-# Which terminal multiplexer are we inside? Echoes "zellij", "muxy", or "".
+# Which terminal multiplexer are we inside? Echoes "herdr", "zellij", "muxy", or "".
 _wt_mux() {
-  if [[ -n "${ZELLIJ:-}" ]]; then
+  if [[ -n "${HERDR_PANE_ID:-}" ]]; then
+    echo herdr
+  elif [[ -n "${ZELLIJ:-}" ]]; then
     echo zellij
   elif [[ -n "${MUXY_PANE_ID:-}" ]]; then
     echo muxy
@@ -73,6 +75,12 @@ _wt_open_tab() {
   cd_cmd="cd -- $(printf '%q' "$cwd")"
 
   case "$(_wt_mux)" in
+    herdr)
+      # Native herdr: open the worktree as its own workspace (like the UI).
+      local pane
+      pane="$(herdr worktree open --cwd "$(_wt_repo_root)" --path "$cwd" --focus --json 2>/dev/null | jq -r '.result.root_pane.pane_id // empty')"
+      _wt_herdr_run_in_pane "$pane" "$launch"
+      ;;
     zellij)
       zellij action new-tab --cwd "$cwd" --name "$name"
       sleep 0.3
@@ -142,6 +150,9 @@ _wt_use_current_tab() {
 
 _wt_close_current_tab() {
   case "$(_wt_mux)" in
+    # A worktree is a whole workspace under herdr; remove it (tolerates the
+    # git worktree already being gone) so the orphaned workspace closes too.
+    herdr)  herdr worktree remove --workspace "${HERDR_TAB_ID%%:*}" --force > /dev/null 2>&1 ;;
     zellij) zellij action close-tab ;;
     muxy)   muxy close-pane --pane "$MUXY_PANE_ID" ;;
   esac
@@ -151,9 +162,12 @@ _wt_prompt_close_tab() {
   local mux
   mux="$(_wt_mux)"
   [[ -n "$mux" ]] || return 0
-  local label="Zellij"
-  [[ "$mux" == muxy ]] && label="Muxy"
-  printf "Close current %s tab? [Y/n] " "$label"
+  local target="Zellij tab"
+  case "$mux" in
+    herdr) target="herdr workspace" ;;
+    muxy)  target="Muxy tab" ;;
+  esac
+  printf "Close current %s? [Y/n] " "$target"
   local ans
   read -r ans || true
   if [[ -z "$ans" || "$ans" =~ ^[Yy]$ ]]; then
@@ -216,6 +230,37 @@ _wt_muxy_run_in_pane() {
   muxy send-keys --pane "$pane" Enter
 }
 
+# herdr has native worktree support: `worktree create`/`worktree open` makes (or
+# reuses) the git worktree AND opens it as a herdr workspace — the same flow as
+# the herdr UI. Echoes "<path>\t<root_pane_id>". WT_WORKTREES_DIR and -c/--current
+# are ignored; herdr places worktrees per its [worktrees].directory config.
+_wt_herdr_worktree() {
+  local branch="$1" origin="$2" out default_branch
+  if [[ -n "$(_wt_worktree_path_for_branch "$branch")" ]]; then
+    out="$(herdr worktree open --cwd "$origin" --branch "$branch" --focus --json 2>&1)"
+  elif git show-ref --verify --quiet "refs/heads/$branch"; then
+    out="$(herdr worktree create --cwd "$origin" --branch "$branch" --focus --json 2>&1)"
+  else
+    default_branch="$(_wt_default_branch)"
+    out="$(herdr worktree create --cwd "$origin" --branch "$branch" --base "origin/$default_branch" --focus --json 2>&1)"
+  fi
+  local wt_path pane
+  wt_path="$(printf '%s' "$out" | jq -r '.result.worktree.path // empty' 2>/dev/null)"
+  pane="$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)"
+  if [[ -z "$wt_path" ]]; then
+    echo "herdr worktree failed: $out" >&2
+    return 1
+  fi
+  printf '%s\t%s\n' "$wt_path" "$pane"
+}
+
+# herdr send-text reaches any pane (no need to make it visible like muxy).
+_wt_herdr_run_in_pane() {  # $1=pane  $2=launch
+  [[ -n "$1" && -n "$2" ]] || return 0
+  herdr pane send-text "$1" "$2"
+  herdr pane send-keys "$1" Enter
+}
+
 _wt_usage() {
   cat <<EOF
 Usage:
@@ -240,6 +285,9 @@ Config:
   WT_WORKTREES_DIR   Override the parent directory where worktrees are stored.
 
 Behavior (new):
+  - Under herdr: delegates to \`herdr worktree create/open\`, so the worktree
+    opens as its own herdr workspace (like the UI); WT_WORKTREES_DIR and
+    -c/--current are ignored, and herdr places it per its [worktrees].directory
   - Under Zellij (or no multiplexer): creates worktrees under
     WT_WORKTREES_DIR/<repo-name>/<branch-name>, defaulting WT_WORKTREES_DIR to
     ../worktrees next to the repo root, and opens a new Zellij tab
@@ -265,7 +313,9 @@ Behavior (del):
   - With -f/--force, also deletes the branch without asking
   - Under Muxy, runs `muxy refresh-worktrees` after removal (Muxy has no
     delete-worktree command) so its worktree list stays in sync
-  - When running inside Zellij or Muxy, always prompts before closing the current tab (default Yes: Enter or y closes, n keeps)
+  - Under herdr, closes the worktree's workspace with `herdr worktree remove`
+  - When running inside herdr, Zellij, or Muxy, always prompts before closing
+    the current tab/workspace (default Yes: Enter or y closes, n keeps)
 EOF
 }
 
@@ -551,7 +601,16 @@ _wt_new() {
   ORIGIN_DIR="$(_wt_repo_root)"
   FOLDER_NAME="$(basename "$ORIGIN_DIR")"
 
-  if [[ "$mux" == muxy ]]; then
+  if [[ "$mux" == herdr ]]; then
+    # Native herdr: `worktree create/open` makes (or reuses) the git worktree
+    # and opens it as a herdr workspace, like the UI. WT_WORKTREES_DIR and
+    # -c/--current have no effect; herdr places it per [worktrees].directory.
+    git fetch origin 2>/dev/null || echo "Warning: could not fetch from origin"
+    local _hw
+    _hw="$(_wt_herdr_worktree "$BRANCH_NAME" "$ORIGIN_DIR")" || exit 1
+    WORKTREE_PATH="${_hw%%$'\t'*}"
+    TARGET_PANE="${_hw##*$'\t'}"
+  elif [[ "$mux" == muxy ]]; then
     # Delegate creation to Muxy so the worktree lands in its configured
     # location and opens in a Muxy tab. -c/--current has no effect here.
     git fetch origin 2>/dev/null || echo "Warning: could not fetch from origin"
@@ -633,7 +692,14 @@ EOF
   LAUNCH_COMMAND="$(printf '%q ' "$TMPSCRIPT" "$TMPSCRIPT" "$WORKTREE_PATH" "$BRANCH_NAME" "$SETUP_SCRIPT" "$ORIGIN_DIR")"
   LAUNCH_COMMAND="${LAUNCH_COMMAND% }"
 
-  if [[ "$mux" == muxy ]]; then
+  if [[ "$mux" == herdr ]]; then
+    # herdr already opened the worktree's workspace; run setup in its root pane.
+    if [[ -n "$TARGET_PANE" ]]; then
+      _wt_herdr_run_in_pane "$TARGET_PANE" "$LAUNCH_COMMAND"
+    else
+      echo "Worktree ready at $WORKTREE_PATH — could not locate its herdr pane to run setup."
+    fi
+  elif [[ "$mux" == muxy ]]; then
     # Muxy already opened the tab in the new worktree; just run setup in it.
     if [[ -n "$TARGET_PANE" ]]; then
       _wt_muxy_run_in_pane "$TARGET_PANE" "$LAUNCH_COMMAND" "$BRANCH_NAME"
