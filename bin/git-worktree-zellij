@@ -159,9 +159,15 @@ _wt_close_current_tab() {
 }
 
 _wt_prompt_close_tab() {
+  local force="${1:-false}"
   local mux
   mux="$(_wt_mux)"
   [[ -n "$mux" ]] || return 0
+  # With -f under herdr, close the workspace automatically (no prompt).
+  if $force && [[ "$mux" == herdr ]]; then
+    _wt_close_current_tab
+    return 0
+  fi
   local target="Zellij tab"
   case "$mux" in
     herdr) target="herdr workspace" ;;
@@ -796,14 +802,14 @@ _wt_delete() {
   # Check if the local branch still exists
   if ! git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
     echo "Branch '$BRANCH_NAME' no longer exists locally. Done."
-    _wt_prompt_close_tab
+    _wt_prompt_close_tab "$FORCE"
     return 0
   fi
 
   if $FORCE; then
     git branch -D "$BRANCH_NAME"
     echo "Branch deleted."
-    _wt_prompt_close_tab
+    _wt_prompt_close_tab "$FORCE"
     return 0
   fi
 
@@ -847,7 +853,7 @@ _wt_delete() {
   fi
 
   # Offer to close the current tab
-  _wt_prompt_close_tab
+  _wt_prompt_close_tab "$FORCE"
 }
 
 # ---------------------------------------------------------------------------
