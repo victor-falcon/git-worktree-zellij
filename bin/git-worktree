@@ -297,7 +297,7 @@ Behavior (new):
   - Under Zellij (or no multiplexer): creates worktrees under
     WT_WORKTREES_DIR/<repo-name>/<branch-name>, defaulting WT_WORKTREES_DIR to
     ../worktrees next to the repo root, and opens a new Zellij tab
-  - Under Muxy: delegates to `muxy create-worktree`, so the worktree lands in
+  - Under Muxy: delegates to \`muxy create-worktree\`, so the worktree lands in
     Muxy's configured location (muxy.general.defaultWorktreeParentPath) and
     opens in a Muxy tab; WT_WORKTREES_DIR and -c/--current are ignored
   - With -c/--current/--current-tab (Zellij only), reuses the current tab and
@@ -317,9 +317,9 @@ Behavior (del):
   - Asks whether to delete the local branch after worktree removal
     - Merged branches default to Yes [Y/n], unmerged default to No [y/N]
   - With -f/--force, also deletes the branch without asking
-  - Under Muxy, runs `muxy refresh-worktrees` after removal (Muxy has no
+  - Under Muxy, runs \`muxy refresh-worktrees\` after removal (Muxy has no
     delete-worktree command) so its worktree list stays in sync
-  - Under herdr, closes the worktree's workspace with `herdr worktree remove`
+  - Under herdr, closes the worktree's workspace with \`herdr worktree remove\`
   - When running inside herdr, Zellij, or Muxy, always prompts before closing
     the current tab/workspace (default Yes: Enter or y closes, n keeps)
 EOF
