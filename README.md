@@ -65,12 +65,14 @@ worktree help
 
 ## Optional Setup Scripts
 
-After creating a worktree, the script looks for the first existing setup script in the source repository and runs it inside the new worktree:
+After creating a worktree, the script looks for a setup script and runs it inside the new worktree. Lookup order:
 
-- `worktree.sh`
-- `.local-dev/scripts/setup-worktree.sh`
+1. **Personal override**, outside the repo: `~/.config/worktree-setup/<repo-folder-name>.sh` (e.g. `~/.config/worktree-setup/my-app.sh` for a repo cloned into `my-app/`). Useful for repos where you can't (or don't want to) commit a setup script. Change the directory with `WT_PERSONAL_SETUP_DIR`.
+2. **In-repo scripts**, first match wins:
+   - `worktree.sh`
+   - `.local-dev/scripts/setup-worktree.sh`
 
-You can change the lookup order by editing `bin/git-worktree`.
+The script runs with the new worktree as the working directory and receives the source repository path as `$1`, so you can copy files from it (`cp "$1/.env" .`). It is made executable automatically if it isn't. You can change the in-repo lookup order by editing `bin/git-worktree`.
 
 ## Configuration
 
@@ -78,6 +80,7 @@ Environment variables:
 
 - `WT_DEFAULT_BRANCH`: override the branch used for merge checks before branch deletion
 - `WT_WORKTREES_DIR`: override the parent directory used to store worktrees (Zellij / no multiplexer; ignored under Herdr and Muxy, which use their own configured location)
+- `WT_PERSONAL_SETUP_DIR`: override the directory holding personal per-repo setup scripts (default: `~/.config/worktree-setup`)
 
 Delete options:
 
